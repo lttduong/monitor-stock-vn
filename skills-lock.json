@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "financial-analysis-agent": {
+      "source": "qodex-ai/ai-agent-skills",
+      "sourceType": "github",
+      "computedHash": "c6fc294c61117b7a5209eab5adefa2c356e3e6a83c3fdd81c7bf44a6466282fc"
+    }
+  }
+}

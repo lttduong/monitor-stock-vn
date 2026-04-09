@@ -1,22 +1,72 @@
 /**
- * Google Gemini AI integration.
- * Generates Vietnamese stock market briefings from real-time data.
+ * AI Briefing Generator.
+ * Generates Vietnamese stock market briefings.
+ *
+ * Strategy:
+ *   1. Try direct Google Gemini API
+ *   2. If geo-restricted, fall back to Cloudflare Workers AI (native binding)
  */
 
 import type { MarketData, ReportType, GeminiResponse } from "./types";
+import type { NewsItem } from "./news";
 
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
-const MODEL = "gemini-2.5-pro-preview-05-06";
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 /** Generate AI analysis from market data. */
 export async function generateBriefing(
-    apiKey: string,
+    geminiApiKey: string,
+    ai: Ai | undefined,
     marketData: MarketData,
     reportType: ReportType,
 ): Promise<string> {
     const prompt = buildPrompt(marketData, reportType);
+    return await callAI(geminiApiKey, ai, prompt);
+}
 
-    const url = `${GEMINI_API}/models/${MODEL}:generateContent?key=${apiKey}`;
+/** Generate AI news digest from RSS items. */
+export async function generateNewsDigest(
+    geminiApiKey: string,
+    ai: Ai | undefined,
+    newsItems: NewsItem[],
+): Promise<string> {
+    const prompt = buildNewsPrompt(newsItems);
+    return await callAI(geminiApiKey, ai, prompt);
+}
+
+/** Try Gemini first, fall back to Workers AI. */
+async function callAI(
+    geminiApiKey: string,
+    ai: Ai | undefined,
+    prompt: string,
+): Promise<string> {
+    try {
+        return await callGemini(geminiApiKey, prompt);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`[Gemini] Failed: ${msg}`);
+
+        if (
+            msg.includes("location is not supported") ||
+            msg.includes("RESOURCE_EXHAUSTED") ||
+            msg.includes("429")
+        ) {
+            if (ai) {
+                console.log("[AI] Falling back to Cloudflare Workers AI...");
+                return await callWorkersAI(ai, prompt);
+            }
+            throw new Error(
+                "Gemini geo-restricted and Workers AI binding not configured.",
+            );
+        }
+
+        throw err;
+    }
+}
+
+/** Direct Google Gemini API call. */
+async function callGemini(apiKey: string, prompt: string): Promise<string> {
+    const url = `${GEMINI_API}/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
     const body = {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
@@ -38,16 +88,35 @@ export async function generateBriefing(
     }
 
     const data = (await res.json()) as GeminiResponse;
-
-    if (data.error) {
-        throw new Error(`Gemini error: ${data.error.message}`);
-    }
+    if (data.error) throw new Error(`Gemini error: ${data.error.message}`);
 
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-        throw new Error("Gemini returned empty response");
-    }
+    if (!text) throw new Error("Gemini returned empty response");
+    return text;
+}
 
+/** Cloudflare Workers AI native binding call. */
+async function callWorkersAI(ai: Ai, prompt: string): Promise<string> {
+    const result = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+        messages: [
+            {
+                role: "system",
+                content:
+                    "Bạn là chuyên gia phân tích thị trường chứng khoán Việt Nam. Viết báo cáo bằng tiếng Việt, với emoji phong phú và format HTML cho Telegram (<b>, <i>, <code> tags).",
+            },
+            { role: "user", content: prompt },
+        ],
+        max_tokens: 2048,
+        temperature: 0.7,
+    });
+
+    // Workers AI returns { response: string } for text generation
+    const text =
+        typeof result === "string"
+            ? result
+            : (result as { response?: string }).response;
+
+    if (!text) throw new Error("Workers AI returned empty response");
     return text;
 }
 
@@ -68,7 +137,6 @@ function buildPrompt(data: MarketData, reportType: ReportType): string {
             "Tập trung vào: tổng kết phiên, top tăng/giảm, dòng tiền, outlook phiên ngày mai.",
     };
 
-    // Format indices
     let indicesBlock = "";
     if (data.indices.length > 0) {
         indicesBlock = data.indices
@@ -81,7 +149,6 @@ function buildPrompt(data: MarketData, reportType: ReportType): string {
         indicesBlock = "  (Không có dữ liệu chỉ số)";
     }
 
-    // Format watchlist
     let watchlistBlock = "";
     if (data.watchlist.length > 0) {
         watchlistBlock = data.watchlist
@@ -94,7 +161,6 @@ function buildPrompt(data: MarketData, reportType: ReportType): string {
         watchlistBlock = "  (Không có dữ liệu danh mục)";
     }
 
-    // Format top gainers/losers
     const gainersBlock =
         data.topGainers.length > 0
             ? data.topGainers
@@ -115,7 +181,6 @@ function buildPrompt(data: MarketData, reportType: ReportType): string {
                 .join("\n")
             : "  (Không có dữ liệu)";
 
-    // Format sectors
     let sectorsBlock = "";
     if (data.sectors.length > 0) {
         sectorsBlock = data.sectors
@@ -189,8 +254,6 @@ QUAN TRỌNG:
 - Kết thúc bằng dòng: "🤖 <i>VN Stock AI — Powered by Gemini</i>"`;
 }
 
-// ── Formatting helpers ─────────────────────────────────
-
 function formatPrice(price: number): string {
     if (price >= 1_000_000) return `${(price / 1_000_000).toFixed(2)}M`;
     if (price >= 1_000) return `${(price / 1_000).toFixed(1)}K`;
@@ -203,3 +266,57 @@ function formatVol(vol: number): string {
     if (vol >= 1_000) return `${(vol / 1_000).toFixed(0)}K`;
     return vol.toString();
 }
+
+/** Build news digest prompt from RSS items. */
+function buildNewsPrompt(newsItems: NewsItem[]): string {
+    const now = new Date();
+    const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const timestamp = vnTime.toISOString().replace("T", " ").slice(0, 16);
+
+    const newsBlock = newsItems
+        .map(
+            (item, i) =>
+                `${i + 1}. [${item.category}] ${item.source}\n   "${item.title}"\n   ${item.link}`,
+        )
+        .join("\n\n");
+
+    return `Bạn là biên tập viên tin tức kinh tế. Viết bản tin tổng hợp BẰNG TIẾNG VIỆT, format HTML cho Telegram.
+
+📅 Thời gian: ${timestamp} (Giờ Việt Nam)
+
+═══════════════════════════════════
+📰 TIN TỨC MỚI NHẤT:
+═══════════════════════════════════
+
+${newsBlock}
+
+═══════════════════════════════════
+📝 YÊU CẦU:
+═══════════════════════════════════
+
+Viết bản tin tổng hợp với format:
+
+1. Header: "📰 <b>TIN TỨC KINH TẾ - [giờ]h</b>"
+
+2. Chọn 5-8 tin QUAN TRỌNG NHẤT từ danh sách trên, nhóm theo chủ đề:
+   - 🏛️ Vĩ mô / Chính sách
+   - 📈 Chứng khoán / Thị trường
+   - 🏠 Bất động sản
+   - ₿ Crypto / Blockchain
+   - 🌍 Kinh tế quốc tế
+   - 💼 Doanh nghiệp
+
+3. Mỗi tin viết 1-2 dòng TÓM TẮT ngắn gọn (không copy nguyên title)
+
+4. Cuối bản tin thêm:
+   - 💡 <b>Điểm nhấn</b>: 1 câu tóm tắt xu hướng chung
+   - ⚡ <b>Cần theo dõi</b>: 1-2 điều cần chú ý tiếp
+
+QUAN TRỌNG:
+- Dùng HTML tags (<b>, <i>, <code>) KHÔNG dùng Markdown
+- Viết TÓM TẮT, không copy nguyên tiêu đề
+- Thêm emoji phong phú
+- Tổng độ dài tối đa 2500 ký tự
+- Kết thúc: "🤖 <i>VN Stock AI — Bản tin mỗi giờ</i>"`;
+}
+

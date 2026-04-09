@@ -1,0 +1,60 @@
+# compiled output
+/dist
+node_modules
+package-lock.json
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+/projects
+/k8s/frontend-base/node_modules
+/k8s/generated
+/k8s/context
+
+# OS
+.DS_Stor#e
+
+# Tests
+/coverage
+/.nyc_output
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Code
+# src/config/config.development.*
+# src/config/config.production.*
+docs/sample/mysql/
+
+# environment
+.env
+.env.stg
+.env.prod
+#.env.development
+#.env.production
+
+# Credentials
+credentials/firebase-admin-credentials.json
+credentials/app-store-connect-private-key.pem
+
+# Dev data
+/__data/
+
+public/tmp

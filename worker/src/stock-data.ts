@@ -226,6 +226,91 @@ async function fetchSectorPerformance(): Promise<SectorPerformance[]> {
     }
 }
 
+// ── Foreign Flow ───────────────────────────────────────
+
+import type { ForeignFlowItem, ForeignFlowData } from "./types";
+
+/** Fetch foreign investor buy/sell data from TCBS screening. */
+export async function fetchForeignFlow(): Promise<ForeignFlowData> {
+    const now = new Date();
+    const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const timestamp = vnTime.toISOString().replace("T", " ").slice(0, 16);
+
+    // Fetch top foreign buyers and sellers in parallel
+    const [buyResult, sellResult] = await Promise.allSettled([
+        fetchForeignRanking("buy"),
+        fetchForeignRanking("sell"),
+    ]);
+
+    const topBuy = buyResult.status === "fulfilled" ? buyResult.value : [];
+    const topSell = sellResult.status === "fulfilled" ? sellResult.value : [];
+
+    const totalNetBuy = topBuy.reduce((sum, i) => sum + i.foreignNetVol, 0);
+    const totalNetSell = topSell.reduce((sum, i) => sum + Math.abs(i.foreignNetVol), 0);
+
+    return { timestamp, topBuy, topSell, totalNetBuy, totalNetSell };
+}
+
+/** Fetch top foreign buy or sell ranked stocks. */
+async function fetchForeignRanking(
+    direction: "buy" | "sell",
+): Promise<ForeignFlowItem[]> {
+    try {
+        const order = direction === "buy"
+            ? "foreignBuyVolumePercent"
+            : "foreignSellVolumePercent";
+
+        const url = `${TCBS_BASE}/tcanalysis/v1/rating/detail/list?sectorName=&page=0&size=15&order=${order}`;
+        const res = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+        });
+
+        if (!res.ok) {
+            console.log(`[Foreign] ${direction} HTTP ${res.status}`);
+            return [];
+        }
+
+        const data = (await res.json()) as {
+            data?: Array<{
+                ticker: string;
+                closePrice: number;
+                changePricePercent1Day: number;
+                foreignBuyVolumeTotal?: number;
+                foreignSellVolumeTotal?: number;
+                foreignCurrentRoom?: number;
+                foreignOwnPercent?: number;
+                avgVolume10Day?: number;
+            }>;
+        };
+
+        if (!data.data) return [];
+
+        return data.data
+            .filter((item) => {
+                const buyVol = item.foreignBuyVolumeTotal || 0;
+                const sellVol = item.foreignSellVolumeTotal || 0;
+                return buyVol > 0 || sellVol > 0;
+            })
+            .map((item) => ({
+                symbol: item.ticker,
+                foreignBuyVol: item.foreignBuyVolumeTotal || 0,
+                foreignSellVol: item.foreignSellVolumeTotal || 0,
+                foreignNetVol:
+                    (item.foreignBuyVolumeTotal || 0) -
+                    (item.foreignSellVolumeTotal || 0),
+                foreignOwnership: Math.round((item.foreignOwnPercent || 0) * 100) / 100,
+                price: item.closePrice * 1000,
+                changePercent:
+                    Math.round((item.changePricePercent1Day || 0) * 100) / 100,
+            }))
+            .slice(0, 10);
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`[Foreign] ${direction} error: ${msg}`);
+        return [];
+    }
+}
+
 // ── Utilities ──────────────────────────────────────────
 
 function dateToUnix(dateStr: string, offsetDays: number): number {
@@ -241,3 +326,4 @@ function chunk<T>(arr: T[], size: number): T[][] {
     }
     return result;
 }
+

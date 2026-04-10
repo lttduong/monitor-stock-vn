@@ -4,6 +4,7 @@ export interface Env {
     TELEGRAM_CHAT_ID: string;
     GEMINI_API_KEY: string;
     AI?: Ai;
+    DB: D1Database;
     WATCHLIST: string;
 }
 
@@ -71,3 +72,24 @@ export interface GeminiResponse {
     }>;
     error?: { message: string; code: number };
 }
+
+/** Foreign investor flow data for a single stock. */
+export interface ForeignFlowItem {
+    symbol: string;
+    foreignBuyVol: number;
+    foreignSellVol: number;
+    foreignNetVol: number;
+    foreignOwnership: number; // % ownership
+    price: number;
+    changePercent: number;
+}
+
+/** Aggregated foreign flow data. */
+export interface ForeignFlowData {
+    timestamp: string;
+    topBuy: ForeignFlowItem[];
+    topSell: ForeignFlowItem[];
+    totalNetBuy: number;  // aggregate net volume
+    totalNetSell: number;
+}
+

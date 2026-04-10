@@ -2,21 +2,36 @@ name = "vn-stock-telegram-bot"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
+# Observability — logs + analytics in CF dashboard
+[observability]
+enabled = true
+
 # Cloudflare Workers AI binding (fallback when Gemini is geo-restricted)
 [ai]
 binding = "AI"
+
+# D1 database for volume tracking
+[[d1_databases]]
+binding = "DB"
+database_name = "vn-stock-db"
+database_id = "4de2f2d7-dc13-4a4e-bb1a-85dd8219ac6e"
 
 # Smart placement - optimize for AI backend latency
 [placement]
 mode = "smart"
 
-# Cron triggers (UTC times — Vietnam is UTC+7)
-# 6:00 AM VN = 23:00 UTC previous day → Mon-Fri market briefing
-# 11:30 AM VN = 04:30 UTC same day → Mon-Fri midday briefing
-# 4:00 PM VN = 09:00 UTC same day → Mon-Fri afternoon briefing
-# Every hour = News digest (24/7)
+# Cron triggers (UTC — Vietnam is UTC+7)
+# Market: 6:00 / 11:30 / 16:00 VN (Mon-Fri)
+# News + Macro: Every 3h (macro also runs at even VN hours via code check)
+# Foreign: 12:00 + 17:00 VN (Mon-Fri)
 [triggers]
-crons = ["0 23 * * 1,2,3,4,5", "30 4 * * 2,3,4,5,6", "0 9 * * 2,3,4,5,6", "0 * * * *"]
+crons = [
+  "0 23 * * 1,2,3,4,5",
+  "30 4 * * 2,3,4,5,6",
+  "0 9 * * 2,3,4,5,6",
+  "0 */3 * * *",
+  "0 5,10 * * 2,3,4,5,6"
+]
 
 # Public vars (non-secret)
 [vars]

@@ -2,9 +2,9 @@
  * Economic News Fetcher.
  * Collects news from Vietnamese and international RSS feeds.
  *
- * Sources:
- *   🇻🇳 VN: CafeF, VnExpress, VietStock
- *   🌍 International: Reuters, CNBC, CoinDesk
+ * Sources (13 feeds):
+ *   🇻🇳 VN: CafeF, VnExpress, Người Lao Động, Thanh Niên
+ *   🌍 International: Reuters, CNBC, CoinDesk, Investing.com
  */
 
 export interface NewsItem {
@@ -15,14 +15,15 @@ export interface NewsItem {
     pubDate: string;
 }
 
-interface RssFeed {
+export interface RssFeed {
     url: string;
     source: string;
     category: string;
 }
 
-const RSS_FEEDS: RssFeed[] = [
-    // 🇻🇳 Vietnamese sources
+/** Hardcoded fallback feeds (used when D1 is unavailable). */
+const FALLBACK_FEEDS: RssFeed[] = [
+    // ── 🇻🇳 Vietnamese sources (all verified 200) ───────
     {
         url: "https://cafef.vn/rss/chung-khoan.rss",
         source: "CafeF",
@@ -48,17 +49,47 @@ const RSS_FEEDS: RssFeed[] = [
         source: "VnExpress",
         category: "🌍 Thế giới",
     },
-    // 🌍 International sources
+    // Người Lao Động
     {
-        url: "https://feeds.reuters.com/reuters/businessNews",
-        source: "Reuters",
-        category: "🌐 Business",
+        url: "https://nld.com.vn/rss/kinh-te.rss",
+        source: "Người Lao Động",
+        category: "💰 Kinh tế",
     },
     {
-        url: "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-        source: "CNBC",
-        category: "📊 Markets",
+        url: "https://nld.com.vn/rss/tai-chinh-chung-khoan.rss",
+        source: "Người Lao Động",
+        category: "📈 Tài chính",
     },
+    // Thanh Niên
+    {
+        url: "https://thanhnien.vn/rss/kinh-te.rss",
+        source: "Thanh Niên",
+        category: "💼 Kinh tế",
+    },
+    // Tuổi Trẻ
+    {
+        url: "https://tuoitre.vn/rss/kinh-doanh.rss",
+        source: "Tuổi Trẻ",
+        category: "💰 Kinh doanh",
+    },
+    {
+        url: "https://tuoitre.vn/rss/the-gioi.rss",
+        source: "Tuổi Trẻ",
+        category: "🌍 Thế giới",
+    },
+    // Dân Trí
+    {
+        url: "https://dantri.com.vn/rss/kinh-doanh.rss",
+        source: "Dân Trí",
+        category: "💼 Kinh doanh",
+    },
+    // Lao Động
+    {
+        url: "https://laodong.vn/rss/kinh-te.rss",
+        source: "Lao Động",
+        category: "� Kinh tế",
+    },
+    // ── 🌍 International sources ─────────────────────────
     {
         url: "https://www.coindesk.com/arc/outboundfeeds/rss/",
         source: "CoinDesk",
@@ -66,10 +97,30 @@ const RSS_FEEDS: RssFeed[] = [
     },
 ];
 
+/** Get active feeds — from D1 if available, else fallback. */
+export async function getFeeds(db?: D1Database): Promise<RssFeed[]> {
+    if (db) {
+        try {
+            const result = await db
+                .prepare("SELECT url, source, category FROM rss_feeds WHERE enabled = 1 ORDER BY source")
+                .all<RssFeed>();
+            if (result.results && result.results.length > 0) {
+                return result.results;
+            }
+        } catch (err) {
+            console.log(`[news] D1 feed query failed, using fallback: ${err}`);
+        }
+    }
+    return FALLBACK_FEEDS;
+}
+
 /** Fetch news from all RSS feeds, returning up to `maxPerSource` items per feed. */
-export async function fetchNews(maxPerSource = 3): Promise<NewsItem[]> {
+export async function fetchNews(maxPerSource = 3, db?: D1Database): Promise<NewsItem[]> {
+    const feeds = await getFeeds(db);
+    console.log(`[news] Fetching from ${feeds.length} feeds...`);
+
     const results = await Promise.allSettled(
-        RSS_FEEDS.map((feed) => fetchRssFeed(feed, maxPerSource)),
+        feeds.map((feed) => fetchRssFeed(feed, maxPerSource)),
     );
 
     const allNews: NewsItem[] = [];
@@ -79,13 +130,11 @@ export async function fetchNews(maxPerSource = 3): Promise<NewsItem[]> {
         }
     }
 
-    // Sort by publication date (newest first)
     allNews.sort(
         (a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime(),
     );
 
-    // Cap at 20 items total
-    return allNews.slice(0, 20);
+    return allNews.slice(0, 30);
 }
 
 /** Parse a single RSS feed. */

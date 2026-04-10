@@ -7,8 +7,10 @@
  *   2. If geo-restricted, fall back to Cloudflare Workers AI (native binding)
  */
 
-import type { MarketData, ReportType, GeminiResponse } from "./types";
+import type { MarketData, ReportType, GeminiResponse, ForeignFlowData } from "./types";
 import type { NewsItem } from "./news";
+import type { MacroData } from "./macro-data";
+import type { VolumeSpike } from "./volume-tracker";
 
 const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_MODEL = "gemini-2.5-flash";
@@ -19,8 +21,9 @@ export async function generateBriefing(
     ai: Ai | undefined,
     marketData: MarketData,
     reportType: ReportType,
+    volumeSpikes: VolumeSpike[] = [],
 ): Promise<string> {
-    const prompt = buildPrompt(marketData, reportType);
+    const prompt = buildPrompt(marketData, reportType, volumeSpikes);
     return await callAI(geminiApiKey, ai, prompt);
 }
 
@@ -31,6 +34,27 @@ export async function generateNewsDigest(
     newsItems: NewsItem[],
 ): Promise<string> {
     const prompt = buildNewsPrompt(newsItems);
+    return await callAI(geminiApiKey, ai, prompt);
+}
+
+/** Generate macro indicators report. */
+export async function generateMacroReport(
+    geminiApiKey: string,
+    ai: Ai | undefined,
+    macroData: MacroData,
+    newsItems: NewsItem[],
+): Promise<string> {
+    const prompt = buildMacroPrompt(macroData, newsItems);
+    return await callAI(geminiApiKey, ai, prompt);
+}
+
+/** Generate foreign flow report. */
+export async function generateForeignFlowReport(
+    geminiApiKey: string,
+    ai: Ai | undefined,
+    flowData: ForeignFlowData,
+): Promise<string> {
+    const prompt = buildForeignFlowPrompt(flowData);
     return await callAI(geminiApiKey, ai, prompt);
 }
 
@@ -71,7 +95,7 @@ async function callGemini(apiKey: string, prompt: string): Promise<string> {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
             temperature: 0.7,
-            maxOutputTokens: 2048,
+            maxOutputTokens: 4096,
             topP: 0.9,
         },
     };
@@ -121,7 +145,7 @@ async function callWorkersAI(ai: Ai, prompt: string): Promise<string> {
 }
 
 /** Build the prompt with real-time data context. */
-function buildPrompt(data: MarketData, reportType: ReportType): string {
+function buildPrompt(data: MarketData, reportType: ReportType, volumeSpikes: VolumeSpike[] = []): string {
     const reportLabels: Record<ReportType, string> = {
         morning: "BÁO CÁO BUỔI SÁNG 🌅 (Trước giờ mở sàn)",
         midday: "BÁO CÁO GIỮA PHIÊN 🕐 (Giữa phiên giao dịch)",
@@ -217,7 +241,10 @@ ${losersBlock}
 
 🏭 HIỆU SUẤT TỪNG NGÀNH:
 ${sectorsBlock}
-
+${volumeSpikes.length > 0 ? `
+🚨 CỔ PHIẾU TĂNG VOLUME BẤT THƯỜNG (5 ngày > 150% TB 30 ngày):
+${volumeSpikes.map((v) => `  - ${v.symbol} [${v.sector}]: Vol 5d=${formatVol(v.avgVol5d)} vs 30d=${formatVol(v.avgVol30d)} (x${v.spikeRatio}) | Giá: ${formatPrice(v.closePrice)}`).join("\n")}
+` : ""}
 ═══════════════════════════════════
 📝 YÊU CẦU BÁO CÁO:
 ═══════════════════════════════════
@@ -244,6 +271,12 @@ Viết báo cáo với các phần sau, mỗi phần có emoji header:
 5. 💡 <b>CHIẾN LƯỢC</b>
    - Gợi ý chiến lược ngắn hạn
    - Tỷ trọng cổ phiếu/tiền mặt gợi ý
+${volumeSpikes.length > 0 ? `
+6. 🚨 <b>CẢNH BÁO VOLUME</b>
+   - Phân tích ${volumeSpikes.length} cổ phiếu có volume tăng bất thường
+   - Phân loại theo ngành và đánh giá: tích lũy hay xả hàng?
+   - Cổ phiếu nào đáng theo dõi nhất?
+` : ""}
 
 QUAN TRỌNG:
 - Dùng HTML tags (<b>, <i>, <code>) KHÔNG dùng Markdown
@@ -298,25 +331,116 @@ Viết bản tin tổng hợp với format:
 
 1. Header: "📰 <b>TIN TỨC KINH TẾ - [giờ]h</b>"
 
-2. Chọn 5-8 tin QUAN TRỌNG NHẤT từ danh sách trên, nhóm theo chủ đề:
+2. Đưa vào TẤT CẢ tin quan trọng (10-15 tin), nhóm theo chủ đề:
    - 🏛️ Vĩ mô / Chính sách
    - 📈 Chứng khoán / Thị trường
    - 🏠 Bất động sản
-   - ₿ Crypto / Blockchain
+   - ₿ Crypto / Blockchain  
    - 🌍 Kinh tế quốc tế
    - 💼 Doanh nghiệp
 
-3. Mỗi tin viết 1-2 dòng TÓM TẮT ngắn gọn (không copy nguyên title)
+3. Mỗi tin viết 1-2 dòng TÓM TẮT, và PHẢI kèm link nguồn bài viết gốc. Format:
+   🔹 <b>Tóm tắt tin</b>
+   📎 <a href="link_bài_gốc">Nguồn: Tên báo</a>
 
 4. Cuối bản tin thêm:
    - 💡 <b>Điểm nhấn</b>: 1 câu tóm tắt xu hướng chung
    - ⚡ <b>Cần theo dõi</b>: 1-2 điều cần chú ý tiếp
 
 QUAN TRỌNG:
-- Dùng HTML tags (<b>, <i>, <code>) KHÔNG dùng Markdown
+- ĐƯA NHIỀU TIN NHẤT CÓ THỂ, tối thiểu 10 tin
+- Dùng HTML tags (<b>, <i>, <code>, <a href="">) KHÔNG dùng Markdown
 - Viết TÓM TẮT, không copy nguyên tiêu đề
+- MỖI TIN PHẢI CÓ LINK nguồn gốc dùng tag <a href="URL">Nguồn</a>
 - Thêm emoji phong phú
-- Tổng độ dài tối đa 2500 ký tự
-- Kết thúc: "🤖 <i>VN Stock AI — Bản tin mỗi giờ</i>"`;
+- Tổng độ dài tối đa 4000 ký tự
+- Kết thúc: "🤖 <i>VN Stock AI — Bản tin mỗi 10 phút</i>"`;
 }
 
+/** Build macro indicators prompt. */
+function buildMacroPrompt(data: MacroData, newsItems: NewsItem[]): string {
+    const now = new Date();
+    const vnTime = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const hour = vnTime.getUTCHours();
+
+    const newsContext = newsItems.length > 0
+        ? newsItems.slice(0, 10).map((n) => `- [${n.source}] ${n.title}`).join("\n")
+        : "(Không có tin tức mới)";
+
+    return `Bạn là chuyên gia kinh tế vĩ mô. Viết báo cáo BẰNG TIẾNG VIỆT, format HTML cho Telegram.
+
+📅 ${data.timestamp} (${hour}h VN)
+
+📊 DỮ LIỆU VĨ MÔ THỰC TẾ:
+
+💱 TỶ GIÁ:
+- USD/VND: ${data.fx.usdVnd.toLocaleString()} | EUR/VND: ${data.fx.eurVnd.toLocaleString()}
+- USD/JPY: ${data.fx.usdJpy} | DXY ~${data.fx.dxyApprox}
+
+🥇 KIM LOẠI QUÝ:
+- Vàng XAU: $${data.gold.xauUsd.toLocaleString()}/oz (~${data.gold.xauVnd}tr VND/lượng)
+- Bạc XAG: $${data.gold.xagUsd.toFixed(2)}/oz
+
+📰 TIN TỨC:
+${newsContext}
+
+YÊU CẦU: Viết báo cáo vĩ mô gồm:
+1. "📊 <b>BÁO CÁO VĨ MÔ - ${hour}h</b>" (header)
+2. 💱 <b>TỶ GIÁ & TIỀN TỆ</b> - USD/VND, EUR/VND, DXY, tác động XNK
+3. 🥇 <b>VÀNG & HÀNG HÓA</b> - Vàng, bạc, dầu (dùng kiến thức), lạm phát
+4. 🏦 <b>LÃI SUẤT</b> - Fed, NHNN, US Treasury 10Y
+5. 🏠 <b>BĐS HCM</b> - Xu hướng mới nhất từ tin tức
+6. 💡 <b>NHẬN ĐỊNH ĐẦU TƯ</b> - Macro ảnh hưởng TTCK VN thế nào? Phòng thủ hay tấn công?
+
+QUAN TRỌNG: HTML tags (<b>,<i>,<code>), KHÔNG Markdown. Dữ liệu FX/vàng là THỰC. Dầu/lãi suất/BĐS dùng kiến thức + tin tức. Max 4000 ký tự. Kết: "🤖 <i>VN Stock AI — Macro Report</i>"`;
+}
+
+/** Build foreign flow prompt. */
+function buildForeignFlowPrompt(data: ForeignFlowData): string {
+    const buyBlock = data.topBuy.length > 0
+        ? data.topBuy.map((i) =>
+            `- ${i.symbol}: Mua ${fmtVol(i.foreignBuyVol)} | Bán ${fmtVol(i.foreignSellVol)} | Net ${i.foreignNetVol > 0 ? "+" : ""}${fmtVol(i.foreignNetVol)} | SH: ${i.foreignOwnership}% | ${fmtPrice(i.price)} (${i.changePercent > 0 ? "+" : ""}${i.changePercent}%)`
+        ).join("\n")
+        : "(Không có dữ liệu)";
+
+    const sellBlock = data.topSell.length > 0
+        ? data.topSell.map((i) =>
+            `- ${i.symbol}: Mua ${fmtVol(i.foreignBuyVol)} | Bán ${fmtVol(i.foreignSellVol)} | Net ${i.foreignNetVol > 0 ? "+" : ""}${fmtVol(i.foreignNetVol)} | SH: ${i.foreignOwnership}% | ${fmtPrice(i.price)} (${i.changePercent > 0 ? "+" : ""}${i.changePercent}%)`
+        ).join("\n")
+        : "(Không có dữ liệu)";
+
+    return `Bạn là chuyên gia dòng tiền khối ngoại TTCK VN. Viết báo cáo BẰNG TIẾNG VIỆT, HTML cho Telegram.
+
+📅 ${data.timestamp}
+
+💰 DỮ LIỆU KHỐI NGOẠI:
+
+🟢 TOP MUA RÒNG:
+${buyBlock}
+
+🔴 TOP BÁN RÒNG:
+${sellBlock}
+
+📊 Tổng mua ròng top 10: ${fmtVol(data.totalNetBuy)} | Tổng bán ròng: ${fmtVol(data.totalNetSell)}
+
+YÊU CẦU: Viết báo cáo gồm:
+1. "💰 <b>DÒNG TIỀN KHỐI NGOẠI</b>" (header)
+2. 🟢 <b>TOP MUA RÒNG</b> - 5-7 CP khối ngoại mua mạnh, lý do, còn room?
+3. 🔴 <b>TOP BÁN RÒNG</b> - 5-7 CP bị bán, lý do (chốt lời/rủi ro)
+4. 📊 <b>XU HƯỚNG DÒNG TIỀN</b> - Mua ròng hay bán ròng? Ngành nào tích lũy? ETF nào ảnh hưởng?
+5. 💡 <b>NHẬN ĐỊNH</b> - Khối ngoại báo hiệu gì? Follow hay contrarian?
+
+QUAN TRỌNG: HTML tags (<b>,<i>,<code>), KHÔNG Markdown. Dữ liệu là THỰC. Max 4000 ký tự. Kết: "🤖 <i>VN Stock AI — Foreign Flow Report</i>"`;
+}
+
+function fmtVol(vol: number): string {
+    if (Math.abs(vol) >= 1_000_000) return `${(vol / 1_000_000).toFixed(1)}M`;
+    if (Math.abs(vol) >= 1_000) return `${(vol / 1_000).toFixed(0)}K`;
+    return vol.toString();
+}
+
+function fmtPrice(price: number): string {
+    if (price >= 1_000_000) return `${(price / 1_000_000).toFixed(2)}M`;
+    if (price >= 1_000) return `${(price / 1_000).toFixed(1)}K`;
+    return price.toFixed(0);
+}
